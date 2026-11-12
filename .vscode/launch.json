@@ -1,0 +1,22 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Travel planner (interactive)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "travel_planner",
+            "console": "integratedTerminal",
+            "envFile": "${workspaceFolder}/.env"
+        },
+        {
+            "name": "Travel planner (single query, verbose)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "travel_planner",
+            "args": ["-v", "What is the best time to visit Jaipur?"],
+            "console": "integratedTerminal",
+            "envFile": "${workspaceFolder}/.env"
+        }
+    ]
+}

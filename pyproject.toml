@@ -1,0 +1,31 @@
+[project]
+name = "travel-planner"
+version = "0.1.0"
+description = "Multi-agent travel planner (LangGraph): orchestrator, flight/hotel search agent, planner agent and synthesizer"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "deepagents>=0.7.35",
+    "google-search-results>=2.4.2",
+    "langchain>=1.5.0",
+    "langchain-openai>=1.7.4",
+    "langchain-tavily>=0.2.18",
+    "langgraph>=1.2.20",
+    "python-dotenv>=1.2.4",
+]
+
+[project.scripts]
+travel-planner = "travel_planner.main:main"
+
+[build-system]
+requires = ["uv_build>=0.11.32,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.4.0",
+    "pytest>=9.2.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
