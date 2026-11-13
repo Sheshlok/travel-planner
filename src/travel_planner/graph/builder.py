@@ -33,7 +33,9 @@ def build_parallel_travel_agent(checkpointer: BaseCheckpointSaver | None = None,
     builder.add_node("planner_agent_node", planner_agent_node)
     builder.add_node("search_tool_node", search_tool_node)
     builder.add_node("planner_tool_node", planner_tool_node)
-    builder.add_node("synthesizer", synthesizer_node)
+    # defer=True: wait until every parallel branch (and its tool loop) has
+    # finished, so the synthesizer runs exactly once per turn
+    builder.add_node("synthesizer", synthesizer_node, defer=True)
 
     # Connect edges
     builder.add_edge(START, "orchestrator")

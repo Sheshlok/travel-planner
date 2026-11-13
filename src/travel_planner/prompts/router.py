@@ -46,3 +46,13 @@ Query: "I want to visit Tokyo - book flights from NYC and create a 5-day itinera
     {"source": "planner_agent_node", "user_query": "Create a 5-day itinerary for Tokyo", "focus": "daily schedule and activities"}
   ]
 → requires_synthesis: true """
+
+# Added on top of the notebook prompt so follow-up questions work with memory.
+ROUTER_MEMORY_RULES = """
+
+CONVERSATION CONTEXT:
+- Earlier turns of the conversation (if any) are included before the latest user message.
+- Use them to resolve references such as "there", "that city", "those dates" or "this tour".
+- Every user_query you produce MUST be self-contained: name the destination, dates and other
+  details explicitly, because the agents do NOT see the conversation history.
+"""

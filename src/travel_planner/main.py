@@ -19,7 +19,7 @@ def print_details(result: dict) -> None:
     print("=" * 60)
     print("TASKS DISPATCHED:")
     for task in result.get("tasks", []):
-        print(f"  • {task.source}: {task.user_query}")
+        print(f"  • {task['source']}: {task['user_query']}")
 
     print("\n" + "=" * 60)
     print("AGENT RESULTS:")

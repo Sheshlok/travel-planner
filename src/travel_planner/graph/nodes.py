@@ -10,6 +10,7 @@ from travel_planner.llm import get_llm
 from travel_planner.prompts import (
     FLIGHT_HOTEL_SEARCH_INSTRUCTIONS,
     ROUTER_INSTRUCTIONS,
+    ROUTER_MEMORY_RULES,
     SYNTHESIZER_PROMPT,
     TRAVEL_SCOUT_INSTRUCTIONS,
 )
@@ -34,23 +35,34 @@ def _planner_model_with_tools():
 
 SEARCH_TOOLS_BY_NAME = {tool.name: tool for tool in SEARCH_TOOLS}
 
+# How many earlier messages (questions + answers) the router sees
+HISTORY_WINDOW = 6
+
 
 # ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
 
 def classify_query_parallel(state: TravelPlannerState) -> dict:
-    """Router that can dispatch to MULTIPLE agents."""
-    structured_llm = get_llm().with_structured_output(ClassificationResult)
+    """Router that can dispatch to MULTIPLE agents.
 
-    result = structured_llm.invoke([
-        {"role": "system", "content": ROUTER_INSTRUCTIONS},
-        {"role": "user", "content": state["user_query"]},
-    ])
+    Sees recent conversation history so it can turn follow-ups like
+    "Major historical sites there" into self-contained agent queries.
+    """
+    structured_llm = get_llm().with_structured_output(ClassificationResult)
+    history = state.get("messages", [])[-HISTORY_WINDOW:]
+    question = HumanMessage(content=state["user_query"])
+
+    result = structured_llm.invoke(
+        [SystemMessage(content=ROUTER_INSTRUCTIONS + ROUTER_MEMORY_RULES)]
+        + history
+        + [question]
+    )
 
     return {
-        "tasks": result.tasks,
+        "tasks": [task.model_dump() for task in result.tasks],
         "requires_synthesis": result.requires_synthesis,
+        "messages": [question],  # remember the question for later turns
     }
 
 
@@ -60,7 +72,7 @@ def dispatch_to_agents(state: TravelPlannerState):
     for task in state.get("tasks", []):
         worker_state = {
             "messages": state.get("messages", []),
-            "user_query": task.user_query,
+            "user_query": task["user_query"],
             "tasks": state.get("tasks", []),
             "requires_synthesis": state.get("requires_synthesis", False),
             "agent_results": [],  # Each worker starts fresh
@@ -69,9 +81,9 @@ def dispatch_to_agents(state: TravelPlannerState):
             "planner_messages": [],  # Initialize empty for workers
         }
 
-        if task.source == "search_agent_node":
+        if task["source"] == "search_agent_node":
             sends.append(Send("search_agent_node", worker_state))
-        elif task.source == "planner_agent_node":
+        elif task["source"] == "planner_agent_node":
             sends.append(Send("planner_agent_node", worker_state))
 
     return sends
@@ -123,16 +135,15 @@ def search_agent_node(state: TravelPlannerState):
     """Search agent with its own message history."""
     search_msgs = state.get("search_messages", [])
 
-    messages = [SystemMessage(content=FLIGHT_HOTEL_SEARCH_INSTRUCTIONS)] + search_msgs
+    # First call (from the orchestrator): start the scratchpad with the query.
+    # It is saved to state so the agent still sees it after tool calls.
+    new_msgs = [] if search_msgs else [HumanMessage(content=state.get("user_query", ""))]
 
-    # If this is first call, add the user query
-    if not search_msgs:
-        messages.append(HumanMessage(content=state.get("user_query", "")))
-
+    messages = [SystemMessage(content=FLIGHT_HOTEL_SEARCH_INSTRUCTIONS)] + search_msgs + new_msgs
     response = _search_model_with_tools().invoke(messages)
 
     return {
-        "search_messages": [response],
+        "search_messages": new_msgs + [response],
         "agent_results": [{
             "agent": "search_agent",
             "focus": "flights and hotels",
@@ -169,16 +180,15 @@ def planner_agent_node(state: TravelPlannerState):
     """Planner agent with its own message history."""
     planner_msgs = state.get("planner_messages", [])
 
-    messages = [SystemMessage(content=TRAVEL_SCOUT_INSTRUCTIONS)] + planner_msgs
+    # First call (from the orchestrator): start the scratchpad with the query.
+    # It is saved to state so the agent still sees it after tool calls.
+    new_msgs = [] if planner_msgs else [HumanMessage(content=state.get("user_query", ""))]
 
-    # If this is first call, add the user query
-    if not planner_msgs:
-        messages.append(HumanMessage(content=state.get("user_query", "")))
-
+    messages = [SystemMessage(content=TRAVEL_SCOUT_INSTRUCTIONS)] + planner_msgs + new_msgs
     response = _planner_model_with_tools().invoke(messages)
 
     return {
-        "planner_messages": [response],
+        "planner_messages": new_msgs + [response],
         "agent_results": [{
             "agent": "planner_agent",
             "focus": "travel planning and itinerary",

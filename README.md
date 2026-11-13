@@ -68,3 +68,14 @@ Run `uv add --dev ipykernel` once if it isn't installed, then pick the `.venv` k
 - Models, tools and agents are created lazily, so importing the package needs no keys.
 - The notebook defined `build_parallel_travel_agent()` twice. There is now one version, and the in-memory checkpointer is on by default.
 - Test cells and `display(Image(...))` were removed. Use `--draw-graph` for the diagram.
+
+## Fixes to the notebook's graph logic
+
+- **The agents keep the question.** Each agent's first message (the query) is saved in its scratchpad, so the agent still sees the question after a tool call.
+- **Each turn starts clean.** `agent_results`, `search_messages` and `planner_messages` are reset every turn (the `extend_or_reset` reducer), so earlier answers aren't synthesized again.
+- **Memory works through the router.** The router sees the last few questions and answers, and rewrites follow-ups ("sites there") into self-contained queries for the agents.
+- **The synthesizer runs once.** It is added with `defer=True`, so it waits for every parallel branch to finish.
+- **Tasks are stored as plain dicts,** which removes the checkpoint deserialization warning.
+
+`tests/test_multiturn.py` checks all of this with a fake model.
+

@@ -38,8 +38,8 @@ def test_graph_compiles_with_expected_nodes():
 def test_dispatch_sends_one_task_per_agent():
     state = initial_state("Plan a week in London and find hotels")
     state["tasks"] = [
-        AgentTask(source="search_agent_node", user_query="hotels in London"),
-        AgentTask(source="planner_agent_node", user_query="week in London"),
+        AgentTask(source="search_agent_node", user_query="hotels in London").model_dump(),
+        AgentTask(source="planner_agent_node", user_query="week in London").model_dump(),
     ]
     sends = dispatch_to_agents(state)
     assert [s.node for s in sends] == ["search_agent_node", "planner_agent_node"]
