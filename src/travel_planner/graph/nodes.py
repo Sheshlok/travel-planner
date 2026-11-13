@@ -9,6 +9,7 @@ from travel_planner.agents.travel_scout import get_planner_tools
 from travel_planner.llm import get_llm
 from travel_planner.prompts import (
     FLIGHT_HOTEL_SEARCH_INSTRUCTIONS,
+    NO_BOOKING_RULES,
     ROUTER_INSTRUCTIONS,
     ROUTER_MEMORY_RULES,
     SYNTHESIZER_PROMPT,
@@ -139,7 +140,7 @@ def search_agent_node(state: TravelPlannerState):
     # It is saved to state so the agent still sees it after tool calls.
     new_msgs = [] if search_msgs else [HumanMessage(content=state.get("user_query", ""))]
 
-    messages = [SystemMessage(content=FLIGHT_HOTEL_SEARCH_INSTRUCTIONS)] + search_msgs + new_msgs
+    messages = [SystemMessage(content=FLIGHT_HOTEL_SEARCH_INSTRUCTIONS + NO_BOOKING_RULES)] + search_msgs + new_msgs
     response = _search_model_with_tools().invoke(messages)
 
     return {

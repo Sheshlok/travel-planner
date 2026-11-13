@@ -55,4 +55,11 @@ CONVERSATION CONTEXT:
 - Use them to resolve references such as "there", "that city", "those dates" or "this tour".
 - Every user_query you produce MUST be self-contained: name the destination, dates and other
   details explicitly, because the agents do NOT see the conversation history.
+- Stay close to what the user asked. Do NOT add requirements, destinations or details
+  the user didn't ask for; only add context from earlier turns that is needed to make
+  the query self-contained.
+- Carry forward constraints the user set in earlier turns (dates, travelers, star rating,
+  budget, cabin class, preferences) unless the user explicitly changes them. For example,
+  "cheaper hotels there" after a 4-star hotel search means cheaper 4-star hotels in the
+  same city for the same dates.
 """

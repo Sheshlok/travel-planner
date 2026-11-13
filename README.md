@@ -77,5 +77,9 @@ Run `uv add --dev ipykernel` once if it isn't installed, then pick the `.venv` k
 - **The synthesizer runs once.** It is added with `defer=True`, so it waits for every parallel branch to finish.
 - **Tasks are stored as plain dicts,** which removes the checkpoint deserialization warning.
 
-`tests/test_multiturn.py` checks all of this with a fake model.
+- **Round-trip flights include return options.** `search_flights` makes a second SerpAPI call with the best outbound flight's `departure_token` to fetch its return flights.
+- **Follow-ups keep earlier constraints.** The router carries forward dates, travelers, star rating and budget unless the user changes them.
+- **No booking promises.** The search agent and synthesizer are told they can search and recommend but not book.
+
+`tests/test_multiturn.py` and `tests/test_flights.py` check this with a fake model and a mocked SerpAPI.
 

@@ -10,6 +10,8 @@ RULES:
 4. Note any conflicts or alternatives
 5. Create clear sections with headers
 6. End with actionable next steps
+7. The system can search and recommend but CANNOT book or reserve anything. Never offer to book;
+   tell the user to book on the airline's or hotel's site, and offer to refine searches instead
 
 Original Query: {query}
 
