@@ -91,22 +91,28 @@ def run_turn(query: str) -> tuple[str, dict]:
     t0 = time.time()
     log.info("turn started (thread %s): %s", st.session_state.thread_id, query[:80])
 
-    for kind, value in stream_turn(get_agent(), query, st.session_state.thread_id):
-        if kind != "token":
-            log.info("%6.1fs %s %s", time.time() - t0, kind, value if kind == "status" else "")
-        elif not streamed:
-            log.info("%6.1fs first answer token", time.time() - t0)
-        if kind == "status":
-            status.update(label=value)
-            status.write(value)
-        elif kind == "token":
-            streamed += value
-            placeholder.markdown(md(streamed) + " ▌")
-        elif kind == "reset":
-            streamed = ""
-            placeholder.empty()
-        elif kind == "done":
-            state = value
+    try:
+        for kind, value in stream_turn(get_agent(), query, st.session_state.thread_id):
+            if kind != "token":
+                log.info("%6.1fs %s %s", time.time() - t0, kind, value if kind == "status" else "")
+            elif not streamed:
+                log.info("%6.1fs first answer token", time.time() - t0)
+            if kind == "status":
+                status.update(label=value)
+                status.write(value)
+            elif kind == "token":
+                streamed += value
+                placeholder.markdown(md(streamed) + " ▌")
+            elif kind == "reset":
+                streamed = ""
+                placeholder.empty()
+            elif kind == "done":
+                state = value
+
+    except Exception:
+        status.update(label="Failed", state="error")
+        placeholder.empty()
+        raise
 
     status.update(label="Done", state="complete")
     # The stored final answer is authoritative (also covers models that don't stream)
