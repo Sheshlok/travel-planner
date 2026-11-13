@@ -33,11 +33,38 @@ uv run pytest                                               # offline tests (no 
 
 The **Run and Debug** panel has two launch configurations, so you can set breakpoints inside nodes.
 
+## Web UI (Streamlit)
+
+```bash
+uv run streamlit run src/travel_planner/app.py
+```
+
+Opens at http://localhost:8501. It's a chat with the same memory as the CLI (one conversation per browser tab), live progress for each graph step, the final answer streamed token by token, and an optional "routing and agent details" panel. Set `APP_PASSWORD` to require a password.
+
+Token streaming is in `src/travel_planner/streaming.py`. With one agent it streams that agent's final answer; with several it streams the synthesizer.
+
+### Deploying to Streamlit Community Cloud
+
+1. Push the repo to GitHub (`.env` is git-ignored, so your keys stay local).
+2. On share.streamlit.io, create an app from the repo, branch `main`, main file `src/travel_planner/app.py`. Under Advanced settings, choose Python 3.12 and paste your secrets in TOML format:
+   ```toml
+   OPENAI_API_KEY = "..."
+   TAVILY_API_KEY = "..."
+   SERPAPI_API_KEY = "..."
+   TRAVEL_PLANNER_MODEL = "gpt-5"
+   APP_PASSWORD = "..."
+   ```
+3. Community Cloud installs dependencies from `uv.lock`.
+
+Conversation memory is in RAM, so it resets when the app restarts or sleeps.
+
 ## Layout
 
 ```
 src/travel_planner/
 ├── main.py            CLI entry point
+├── app.py             Streamlit web UI
+├── streaming.py       per-turn progress + answer-token stream (used by the UI)
 ├── config.py          .env loading, model name/temperature
 ├── llm.py             shared chat models (created lazily)
 ├── schemas.py         AgentTask, ClassificationResult

@@ -11,17 +11,18 @@ from langchain_openai import ChatOpenAI
 from travel_planner import config
 
 
-def _temperature_kwargs() -> dict:
-    """Only pass temperature when one is configured."""
-    if config.TEMPERATURE is None:
-        return {}
-    return {"temperature": config.TEMPERATURE}
+def _model_kwargs() -> dict:
+    """Shared settings; temperature only when one is configured."""
+    kwargs = {"timeout": config.LLM_TIMEOUT, "max_retries": config.LLM_MAX_RETRIES}
+    if config.TEMPERATURE is not None:
+        kwargs["temperature"] = config.TEMPERATURE
+    return kwargs
 
 
 @lru_cache(maxsize=1)
 def get_llm() -> ChatOpenAI:
     """Main chat model: router, search agent, planner agent, synthesizer."""
-    return ChatOpenAI(model=config.MODEL_NAME, **_temperature_kwargs())
+    return ChatOpenAI(model=config.MODEL_NAME, **_model_kwargs())
 
 
 @lru_cache(maxsize=1)
@@ -30,5 +31,5 @@ def get_research_model():
     return init_chat_model(
         model=config.MODEL_NAME,
         model_provider="openai",
-        **_temperature_kwargs(),
+        **_model_kwargs(),
     )

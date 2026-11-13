@@ -20,6 +20,11 @@ MODEL_NAME = os.getenv("TRAVEL_PLANNER_MODEL", "gpt-5.2")
 _temperature = os.getenv("TRAVEL_PLANNER_TEMPERATURE", "0.2").strip()
 TEMPERATURE: float | None = float(_temperature) if _temperature else None
 
+# Seconds to wait on one model request before retrying (no timeout by default in
+# the OpenAI client, so a stalled connection could otherwise hang forever)
+LLM_TIMEOUT = float(os.getenv("TRAVEL_PLANNER_LLM_TIMEOUT", "180"))
+LLM_MAX_RETRIES = int(os.getenv("TRAVEL_PLANNER_LLM_MAX_RETRIES", "2"))
+
 
 def missing_keys() -> list[str]:
     """Return the names of required API keys that are not set."""

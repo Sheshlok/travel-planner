@@ -10,7 +10,7 @@ import os
 for key in ("OPENAI_API_KEY", "TAVILY_API_KEY", "SERPAPI_API_KEY"):
     os.environ.setdefault(key, "test-key")
 
-import pytest  # noqa: E402
+import pytest  # noqa: E402,F401
 from langchain.messages import AIMessage  # noqa: E402
 from langchain_core.language_models.chat_models import BaseChatModel  # noqa: E402
 from langchain_core.outputs import ChatGeneration, ChatResult  # noqa: E402
