@@ -29,6 +29,18 @@ LLM_MAX_RETRIES = int(os.getenv("TRAVEL_PLANNER_LLM_MAX_RETRIES", "2"))
 # Leave unset for non-reasoning models such as gpt-4o-mini.
 REASONING_EFFORT = os.getenv("TRAVEL_PLANNER_REASONING_EFFORT", "").strip() or None
 
+# Research limits (the main driver of answer time): how many tool-calling rounds
+# each agent may use before it must answer, and the step limit for one call to
+# the itinerary deep-research agent
+PLANNER_MAX_TOOL_ROUNDS = int(os.getenv("TRAVEL_PLANNER_PLANNER_MAX_ROUNDS", "2"))
+SEARCH_MAX_TOOL_ROUNDS = int(os.getenv("TRAVEL_PLANNER_SEARCH_MAX_ROUNDS", "3"))
+ITINERARY_MAX_STEPS = int(os.getenv("TRAVEL_PLANNER_ITINERARY_MAX_STEPS", "30"))
+
+# Web UI background jobs: where conversations and memory are stored, and how
+# many questions may run at the same time (others wait in a queue)
+DB_PATH = os.getenv("TRAVEL_PLANNER_DB", ".data/travel_planner.sqlite")
+MAX_CONCURRENT_JOBS = int(os.getenv("TRAVEL_PLANNER_MAX_JOBS", "3"))
+
 
 def missing_keys() -> list[str]:
     """Return the names of required API keys that are not set."""

@@ -41,6 +41,10 @@ uv run streamlit run src/travel_planner/app.py
 
 Opens at http://localhost:8501. It's a chat with the same memory as the CLI (one conversation per browser tab), live progress for each graph step, the final answer streamed token by token, and an optional "routing and agent details" panel. Under each answer there's an action bar: copy (the original markdown), read aloud (browser speech), 👍/👎 feedback (logged to the terminal / Cloud logs) and retry for the latest answer, which re-runs it from the conversation state before that answer. Set `APP_PASSWORD` to require a password.
 
+**Answers run in the background.** Each question runs as a job on the server (`src/travel_planner/jobs.py`), not inside the browser connection, so closing the tab or locking the phone doesn't stop it. Each conversation has its own link (`?c=…`): reopen it to see live progress or the finished answer. Turns, feedback and conversation memory are stored in SQLite (`.data/travel_planner.sqlite`, git-ignored). Like a chat app, you can keep typing while an answer runs: a new message waits its turn and then runs, and **Stop** ends the current answer (keeping what was written so far). Each turn builds on the memory of the last *completed* answer, so stopped or failed turns never leak into it. A turn cut off by an app restart is shown as interrupted, with a Retry button. At most `TRAVEL_PLANNER_MAX_JOBS` (default 3) questions run at once across all users; others wait.
+
+Anyone with a conversation link can open that conversation, so treat links like the password.
+
 Token streaming is in `src/travel_planner/streaming.py`. With one agent it streams that agent's final answer; with several it streams the synthesizer.
 
 ### Deploying to Streamlit Community Cloud
@@ -56,7 +60,7 @@ Token streaming is in `src/travel_planner/streaming.py`. With one agent it strea
    ```
 3. Community Cloud installs dependencies from `uv.lock`.
 
-Conversation memory is in RAM, so it resets when the app restarts or sleeps.
+On Community Cloud the SQLite file lives on the app's temporary disk, so conversations survive closing the tab but not a reboot or sleep. For permanent history, point the app at an external database. After a push that changes files other than `app.py`, reboot the app (Manage app → Reboot) so it loads the new modules.
 
 ## Layout
 
@@ -66,6 +70,7 @@ src/travel_planner/
 ├── app.py             Streamlit web UI
 ├── streaming.py       per-turn progress + answer-token stream (used by the UI)
 ├── ui_actions.py      answer action bar: copy, read aloud, feedback, retry
+├── jobs.py            background turns + SQLite store (used by the UI)
 ├── config.py          .env loading, model name/temperature
 ├── llm.py             shared chat models (created lazily)
 ├── schemas.py         AgentTask, ClassificationResult
@@ -88,6 +93,18 @@ print(result["final_answer"])
 ```
 
 Run `uv add --dev ipykernel` once if it isn't installed, then pick the `.venv` kernel in VS Code.
+
+## Research limits (speed)
+
+Most of an answer's time goes into research rounds, so each agent gets a fixed budget before it must answer:
+
+| Setting | Default | What it limits |
+|---|---|---|
+| `TRAVEL_PLANNER_PLANNER_MAX_ROUNDS` | 2 | planner tool-calling rounds (web search / itinerary agent) |
+| `TRAVEL_PLANNER_SEARCH_MAX_ROUNDS` | 3 | flight/hotel search rounds |
+| `TRAVEL_PLANNER_ITINERARY_MAX_STEPS` | 30 | steps in one call to the itinerary deep-research agent |
+
+When an agent reaches its limit it is called with `tool_choice="none"`, so it must answer with what it has.
 
 ## Changes from the Colab version
 

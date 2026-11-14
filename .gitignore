@@ -17,3 +17,6 @@ wheels/
 .ipynb_checkpoints/
 .DS_Store
 graph.png
+
+# Local app database (conversations, memory)
+.data/

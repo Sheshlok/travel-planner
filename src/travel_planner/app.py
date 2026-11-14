@@ -1,30 +1,32 @@
 """Streamlit chat UI for the travel planner.
 
 Run locally:  uv run streamlit run src/travel_planner/app.py
+
+Questions run as background jobs (see jobs.py): the page only shows their
+progress, so closing the tab or locking the phone doesn't lose the answer.
+Each conversation has its own link (?c=<id>) to come back to.
 """
 
 import hmac
 import logging
 import os
-import time
-import uuid
 
 import streamlit as st
 
 from travel_planner import config  # loads .env
-from travel_planner.graph import build_parallel_travel_agent
-from travel_planner.streaming import current_checkpoint_id, stream_turn
+from travel_planner import jobs
 from travel_planner.ui_actions import action_bar
 
 st.set_page_config(page_title="Travel Planner", page_icon="✈️", layout="centered")
 
-# Progress log in the terminal running Streamlit (helps diagnose slow or stuck turns)
-log = logging.getLogger("travel_planner.ui")
-if not log.handlers:
+# Progress log in the terminal running Streamlit / Cloud logs (UI + background jobs)
+_logger = logging.getLogger("travel_planner")
+if not _logger.handlers:
     _handler = logging.StreamHandler()
-    _handler.setFormatter(logging.Formatter("%(asctime)s [ui] %(message)s", "%H:%M:%S"))
-    log.addHandler(_handler)
-    log.setLevel(logging.INFO)
+    _handler.setFormatter(logging.Formatter("%(asctime)s [%(name)s] %(message)s", "%H:%M:%S"))
+    _logger.addHandler(_handler)
+    _logger.setLevel(logging.INFO)
+log = logging.getLogger("travel_planner.ui")
 
 EXAMPLES = [
     "What is the best time to visit Jaipur?",
@@ -34,18 +36,8 @@ EXAMPLES = [
 
 
 # ---------------------------------------------------------------------------
-# Setup
+# Helpers
 # ---------------------------------------------------------------------------
-
-@st.cache_resource
-def get_agent():
-    """Build the graph once per server process.
-
-    Its in-memory checkpointer is shared; each browser session uses its own
-    thread_id, so conversations stay separate.
-    """
-    return build_parallel_travel_agent()
-
 
 def check_password() -> None:
     """Optional gate: if APP_PASSWORD is set, ask for it before showing the app."""
@@ -62,9 +54,17 @@ def check_password() -> None:
     st.stop()
 
 
-def new_conversation() -> None:
-    st.session_state.thread_id = f"ui-{uuid.uuid4().hex[:8]}"
-    st.session_state.history = []  # [{"role", "content", "details"}]
+def current_conversation() -> str:
+    """Conversation from the ?c= link, or a new one (written into the link)."""
+    conv_id = st.query_params.get("c")
+    if not conv_id or not jobs.get_conversation(conv_id):
+        conv_id = jobs.new_conversation()
+        st.query_params["c"] = conv_id
+    return conv_id
+
+
+def start_new_conversation() -> None:
+    st.query_params["c"] = jobs.new_conversation()
 
 
 def md(text: str) -> str:
@@ -83,62 +83,65 @@ def render_details(details: dict) -> None:
             st.markdown(md(result["result"]))
 
 
-def run_turn(query: str, from_checkpoint: str | None = None) -> tuple[str, dict]:
-    """Run one turn: live progress in a status box, answer streamed token by token."""
-    status = st.status("Planning…", expanded=False)
-    placeholder = st.empty()
-    streamed = ""
-    state: dict = {}
-    t0 = time.time()
-    log.info("turn started (thread %s): %s", st.session_state.thread_id, query[:80])
-
-    try:
-        for kind, value in stream_turn(
-            get_agent(), query, st.session_state.thread_id, from_checkpoint
-        ):
-            if kind != "token":
-                log.info("%6.1fs %s %s", time.time() - t0, kind, value if kind == "status" else "")
-            elif not streamed:
-                log.info("%6.1fs first answer token", time.time() - t0)
-            if kind == "status":
-                status.update(label=value)
-                status.write(value)
-            elif kind == "token":
-                streamed += value
-                placeholder.markdown(md(streamed) + " ▌")
-            elif kind == "reset":
-                streamed = ""
-                placeholder.empty()
-            elif kind == "done":
-                state = value
-
-    except Exception:
-        status.update(label="Failed", state="error")
-        placeholder.empty()
-        raise
-
-    status.update(label="Done", state="complete")
-    # The stored final answer is authoritative (also covers models that don't stream)
-    answer = state.get("final_answer") or streamed or "Sorry, I couldn't produce an answer."
-    placeholder.markdown(md(answer))
-    details = {"tasks": state.get("tasks", []), "agent_results": state.get("agent_results", [])}
-    return answer, details
-
-
-# ---------------------------------------------------------------------------
-# Feedback and retry
-# ---------------------------------------------------------------------------
-
 def record_feedback(msg: dict) -> None:
-    """Called when 👍/👎 changes. Logged to the terminal / Cloud logs."""
+    """Called when 👍/👎 changes; saved with the turn and logged."""
     value = st.session_state.get(f"fb-{msg['id']}")
-    msg["feedback"] = value
+    jobs.set_feedback(msg["id"], value)
     label = {1: "thumbs_up", 0: "thumbs_down"}.get(value, "cleared")
-    log.info("feedback %s (thread %s): %s", label, st.session_state.thread_id, msg.get("question", "")[:80])
+    log.info("feedback %s (turn %s): %s", label, msg["id"], msg.get("question", "")[:80])
 
 
-def request_retry() -> None:
-    st.session_state.retry_requested = True
+def retry(msg: dict) -> None:
+    jobs.retry_turn(msg["id"])
+    log.info("retry requested (turn %s): %s", msg["id"], msg.get("question", "")[:80])
+
+
+@st.fragment(run_every=1.0)
+def live_turn(turn_id: str) -> None:
+    """Shows a queued/running turn's progress; refreshes itself every second."""
+    turn = jobs.get_turn(turn_id)
+    if turn is None or turn["status"] not in jobs.ACTIVE:
+        st.rerun()  # finished, stopped or replaced: redraw the page with the result
+    # Not used as a `with` block: that would mark it complete (✓) when the block ends
+    st.status(turn["progress"] or "Planning…", state="running", expanded=False)
+    if turn["partial"]:
+        st.markdown(md(turn["partial"]) + " ▌")
+    with st.container(horizontal=True, vertical_alignment="center"):
+        st.button("Stop", icon=":material/stop_circle:", key=f"stop-{turn_id}", type="tertiary",
+                  on_click=jobs.cancel_turn, args=(turn_id,))
+        if turn["status"] == "running":
+            st.caption("You can close this page or lock your phone; reopen this link to see the answer.")
+
+
+def render_turn(turn: dict, *, is_last: bool, show_details: bool) -> None:
+    with st.chat_message("user"):
+        st.markdown(md(turn["question"]))
+    with st.chat_message("assistant"):
+        status = turn["status"]
+        if status in jobs.ACTIVE:
+            live_turn(turn["id"])
+            return
+        msg = {"id": turn["id"], "question": turn["question"]}
+        if status == "done" or (status == "cancelled" and turn["answer"]):
+            st.markdown(md(turn["answer"]))
+            if status == "cancelled":
+                st.caption("Stopped. This answer isn't kept in the conversation memory.")
+            elif show_details and turn["details"]:
+                render_details(turn["details"])
+            msg.update(content=turn["answer"])
+            # Show saved feedback when the conversation is reopened
+            st.session_state.setdefault(f"fb-{turn['id']}", turn["feedback"])
+        else:
+            if status == "cancelled":
+                text = "Stopped before an answer was written."
+            elif status == "interrupted":
+                text = "This answer was interrupted because the app restarted."
+            else:
+                text = f"Something went wrong: {turn['error']}"
+            (st.caption if status == "cancelled" else st.error)(text)
+            msg.update(content=text, error=True)
+        action_bar(msg, is_last=is_last, on_feedback=record_feedback,
+                   on_retry=lambda m=msg: retry(m))
 
 
 # ---------------------------------------------------------------------------
@@ -147,68 +150,35 @@ def request_retry() -> None:
 
 check_password()
 
-if "thread_id" not in st.session_state:
-    new_conversation()
-
-with st.sidebar:
-    st.title("✈️ Travel Planner")
-    st.caption(f"Model: {config.MODEL_NAME}")
-    show_details = st.toggle("Show routing and agent details")
-    if st.button("New conversation", width="stretch"):
-        new_conversation()
-        st.rerun()
-    st.markdown("**Try asking:**")
-    for example in EXAMPLES:
-        st.caption(f"• {example}")
-
 missing = config.missing_keys()
 if missing:
     st.error(f"Missing API keys: {', '.join(missing)}. Add them to .env (or app secrets) and restart.")
     st.stop()
 
+conv_id = current_conversation()
+
+with st.sidebar:
+    st.title("✈️ Travel Planner")
+    st.caption(f"Model: {config.MODEL_NAME}")
+    show_details = st.toggle("Show routing and agent details")
+    st.button("New conversation", width="stretch", on_click=start_new_conversation)
+    st.caption("Bookmark or share this page's link to come back to this conversation.")
+    st.markdown("**Try asking:**")
+    for example in EXAMPLES:
+        st.caption(f"• {example}")
+
 st.title("Where do you want to go?")
 
-history = st.session_state.history
-pending = None  # (question, checkpoint to start from) for a turn to run now
+# Like a chat app: you can always type. A message sent while an answer is
+# running waits its turn and then runs (shown as "Waiting for the previous answer").
+busy = jobs.is_busy(conv_id)
+prompt = st.chat_input(
+    "Type your next message…" if busy else "Ask about a trip, flights, hotels or an itinerary…"
+)
+if prompt:
+    jobs.start_turn(conv_id, prompt)
+    st.rerun()  # redraw with the new turn's live progress
 
-# Retry: drop the last answer and re-ask its question from the state before it
-if st.session_state.pop("retry_requested", False) and history and history[-1]["role"] == "assistant":
-    last = history.pop()
-    pending = (last["question"], last.get("parent_checkpoint"))
-    if pending[1] is None:
-        # It was the first turn: start a fresh thread so the old attempt isn't in memory
-        st.session_state.thread_id = f"ui-{uuid.uuid4().hex[:8]}"
-    log.info("retry requested: %s", last["question"][:80])
-
-if prompt := st.chat_input("Ask about a trip, flights, hotels or an itinerary…"):
-    history.append({"role": "user", "content": prompt})
-    pending = (prompt, current_checkpoint_id(get_agent(), st.session_state.thread_id))
-
-for i, msg in enumerate(history):
-    with st.chat_message(msg["role"]):
-        if msg.get("error"):
-            st.error(msg["content"])
-        else:
-            st.markdown(md(msg["content"]))
-        if msg["role"] == "assistant":
-            if show_details and msg.get("details"):
-                render_details(msg["details"])
-            action_bar(msg, is_last=(i == len(history) - 1 and pending is None),
-                       on_feedback=record_feedback, on_retry=request_retry)
-
-if pending:
-    question, parent = pending
-    msg = {"role": "assistant", "id": uuid.uuid4().hex[:10], "question": question,
-           "parent_checkpoint": parent}
-    with st.chat_message("assistant"):
-        try:
-            answer, details = run_turn(question, from_checkpoint=parent)
-            msg.update(content=answer, details=details)
-            if show_details:
-                render_details(details)
-        except Exception as e:  # show API errors in the page instead of a traceback
-            log.exception("turn failed")
-            msg.update(content=f"Something went wrong: {e}", error=True)
-            st.error(msg["content"])
-        history.append(msg)
-        action_bar(msg, is_last=True, on_feedback=record_feedback, on_retry=request_retry)
+turns = jobs.list_turns(conv_id)
+for i, turn in enumerate(turns):
+    render_turn(turn, is_last=(i == len(turns) - 1), show_details=show_details)

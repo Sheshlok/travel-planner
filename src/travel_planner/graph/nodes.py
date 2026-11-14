@@ -5,6 +5,7 @@ from functools import lru_cache
 from langchain.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.types import Send
 
+from travel_planner import config
 from travel_planner.agents.travel_scout import get_planner_tools
 from travel_planner.llm import get_llm
 from travel_planner.prompts import (
@@ -35,6 +36,22 @@ def _planner_model_with_tools():
 
 
 SEARCH_TOOLS_BY_NAME = {tool.name: tool for tool in SEARCH_TOOLS}
+
+# Told to the agent once it has used its research rounds
+ROUND_LIMIT_NOTE = (
+    "Research limit reached: do not call any more tools. Answer now with the information "
+    "you already have, and briefly note anything you could not verify."
+)
+
+
+def _tool_rounds(msgs: list) -> int:
+    """How many times the agent has already asked for tools in this turn."""
+    return sum(1 for m in msgs if getattr(m, "tool_calls", None))
+
+
+def _answer_only(model_tools: list):
+    """Same tools bound, but tool_choice="none": the model must answer in text."""
+    return get_llm().bind_tools(model_tools, tool_choice="none")
 
 # How many earlier messages (questions + answers) the router sees
 HISTORY_WINDOW = 6
@@ -141,7 +158,10 @@ def search_agent_node(state: TravelPlannerState):
     new_msgs = [] if search_msgs else [HumanMessage(content=state.get("user_query", ""))]
 
     messages = [SystemMessage(content=FLIGHT_HOTEL_SEARCH_INSTRUCTIONS + NO_BOOKING_RULES)] + search_msgs + new_msgs
-    response = _search_model_with_tools().invoke(messages)
+    if _tool_rounds(search_msgs) < config.SEARCH_MAX_TOOL_ROUNDS:
+        response = _search_model_with_tools().invoke(messages)
+    else:
+        response = _answer_only(SEARCH_TOOLS).invoke(messages + [SystemMessage(content=ROUND_LIMIT_NOTE)])
 
     return {
         "search_messages": new_msgs + [response],
@@ -186,7 +206,10 @@ def planner_agent_node(state: TravelPlannerState):
     new_msgs = [] if planner_msgs else [HumanMessage(content=state.get("user_query", ""))]
 
     messages = [SystemMessage(content=TRAVEL_SCOUT_INSTRUCTIONS)] + planner_msgs + new_msgs
-    response = _planner_model_with_tools().invoke(messages)
+    if _tool_rounds(planner_msgs) < config.PLANNER_MAX_TOOL_ROUNDS:
+        response = _planner_model_with_tools().invoke(messages)
+    else:
+        response = _answer_only(get_planner_tools()).invoke(messages + [SystemMessage(content=ROUND_LIMIT_NOTE)])
 
     return {
         "planner_messages": new_msgs + [response],
