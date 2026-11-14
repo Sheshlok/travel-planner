@@ -23,8 +23,21 @@ NODE_LABELS = {
 }
 
 
-def stream_turn(agent, query: str, thread_id: str) -> Iterator[tuple[str, object]]:
+def current_checkpoint_id(agent, thread_id: str) -> str | None:
+    """Id of the thread's latest checkpoint (None for a new thread)."""
+    snapshot = agent.get_state({"configurable": {"thread_id": thread_id}})
+    return snapshot.config.get("configurable", {}).get("checkpoint_id")
+
+
+def stream_turn(
+    agent, query: str, thread_id: str, from_checkpoint: str | None = None
+) -> Iterator[tuple[str, object]]:
+    """Run one turn. With from_checkpoint, the turn starts from that earlier
+    checkpoint instead of the latest one (used to retry the last answer)."""
     cfg = {"configurable": {"thread_id": thread_id}}
+    run_cfg = cfg
+    if from_checkpoint:
+        run_cfg = {"configurable": {"thread_id": thread_id, "checkpoint_id": from_checkpoint}}
 
     # Which node produces the final answer's tokens:
     # - one agent dispatched  -> that agent's last LLM call (synthesizer just passes it through)
@@ -32,7 +45,7 @@ def stream_turn(agent, query: str, thread_id: str) -> Iterator[tuple[str, object
     answer_node = None
 
     for mode, data in agent.stream(
-        initial_state(query), config=cfg, stream_mode=["updates", "messages"]
+        initial_state(query), config=run_cfg, stream_mode=["updates", "messages"]
     ):
         if mode == "updates":
             for node, update in data.items():

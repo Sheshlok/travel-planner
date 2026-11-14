@@ -16,6 +16,8 @@ def _model_kwargs() -> dict:
     kwargs = {"timeout": config.LLM_TIMEOUT, "max_retries": config.LLM_MAX_RETRIES}
     if config.TEMPERATURE is not None:
         kwargs["temperature"] = config.TEMPERATURE
+    if config.REASONING_EFFORT:
+        kwargs["reasoning_effort"] = config.REASONING_EFFORT
     return kwargs
 
 

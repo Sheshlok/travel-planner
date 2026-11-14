@@ -39,7 +39,7 @@ The **Run and Debug** panel has two launch configurations, so you can set breakp
 uv run streamlit run src/travel_planner/app.py
 ```
 
-Opens at http://localhost:8501. It's a chat with the same memory as the CLI (one conversation per browser tab), live progress for each graph step, the final answer streamed token by token, and an optional "routing and agent details" panel. Set `APP_PASSWORD` to require a password.
+Opens at http://localhost:8501. It's a chat with the same memory as the CLI (one conversation per browser tab), live progress for each graph step, the final answer streamed token by token, and an optional "routing and agent details" panel. Under each answer there's an action bar: copy (the original markdown), read aloud (browser speech), 👍/👎 feedback (logged to the terminal / Cloud logs) and retry for the latest answer, which re-runs it from the conversation state before that answer. Set `APP_PASSWORD` to require a password.
 
 Token streaming is in `src/travel_planner/streaming.py`. With one agent it streams that agent's final answer; with several it streams the synthesizer.
 
@@ -65,6 +65,7 @@ src/travel_planner/
 ├── main.py            CLI entry point
 ├── app.py             Streamlit web UI
 ├── streaming.py       per-turn progress + answer-token stream (used by the UI)
+├── ui_actions.py      answer action bar: copy, read aloud, feedback, retry
 ├── config.py          .env loading, model name/temperature
 ├── llm.py             shared chat models (created lazily)
 ├── schemas.py         AgentTask, ClassificationResult

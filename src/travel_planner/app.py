@@ -13,7 +13,8 @@ import streamlit as st
 
 from travel_planner import config  # loads .env
 from travel_planner.graph import build_parallel_travel_agent
-from travel_planner.streaming import stream_turn
+from travel_planner.streaming import current_checkpoint_id, stream_turn
+from travel_planner.ui_actions import action_bar
 
 st.set_page_config(page_title="Travel Planner", page_icon="✈️", layout="centered")
 
@@ -82,7 +83,7 @@ def render_details(details: dict) -> None:
             st.markdown(md(result["result"]))
 
 
-def run_turn(query: str) -> tuple[str, dict]:
+def run_turn(query: str, from_checkpoint: str | None = None) -> tuple[str, dict]:
     """Run one turn: live progress in a status box, answer streamed token by token."""
     status = st.status("Planning…", expanded=False)
     placeholder = st.empty()
@@ -92,7 +93,9 @@ def run_turn(query: str) -> tuple[str, dict]:
     log.info("turn started (thread %s): %s", st.session_state.thread_id, query[:80])
 
     try:
-        for kind, value in stream_turn(get_agent(), query, st.session_state.thread_id):
+        for kind, value in stream_turn(
+            get_agent(), query, st.session_state.thread_id, from_checkpoint
+        ):
             if kind != "token":
                 log.info("%6.1fs %s %s", time.time() - t0, kind, value if kind == "status" else "")
             elif not streamed:
@@ -123,6 +126,22 @@ def run_turn(query: str) -> tuple[str, dict]:
 
 
 # ---------------------------------------------------------------------------
+# Feedback and retry
+# ---------------------------------------------------------------------------
+
+def record_feedback(msg: dict) -> None:
+    """Called when 👍/👎 changes. Logged to the terminal / Cloud logs."""
+    value = st.session_state.get(f"fb-{msg['id']}")
+    msg["feedback"] = value
+    label = {1: "thumbs_up", 0: "thumbs_down"}.get(value, "cleared")
+    log.info("feedback %s (thread %s): %s", label, st.session_state.thread_id, msg.get("question", "")[:80])
+
+
+def request_retry() -> None:
+    st.session_state.retry_requested = True
+
+
+# ---------------------------------------------------------------------------
 # Page
 # ---------------------------------------------------------------------------
 
@@ -149,25 +168,47 @@ if missing:
 
 st.title("Where do you want to go?")
 
-for msg in st.session_state.history:
-    with st.chat_message(msg["role"]):
-        st.markdown(md(msg["content"]))
-        if show_details and msg.get("details"):
-            render_details(msg["details"])
+history = st.session_state.history
+pending = None  # (question, checkpoint to start from) for a turn to run now
+
+# Retry: drop the last answer and re-ask its question from the state before it
+if st.session_state.pop("retry_requested", False) and history and history[-1]["role"] == "assistant":
+    last = history.pop()
+    pending = (last["question"], last.get("parent_checkpoint"))
+    if pending[1] is None:
+        # It was the first turn: start a fresh thread so the old attempt isn't in memory
+        st.session_state.thread_id = f"ui-{uuid.uuid4().hex[:8]}"
+    log.info("retry requested: %s", last["question"][:80])
 
 if prompt := st.chat_input("Ask about a trip, flights, hotels or an itinerary…"):
-    st.session_state.history.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(md(prompt))
+    history.append({"role": "user", "content": prompt})
+    pending = (prompt, current_checkpoint_id(get_agent(), st.session_state.thread_id))
 
+for i, msg in enumerate(history):
+    with st.chat_message(msg["role"]):
+        if msg.get("error"):
+            st.error(msg["content"])
+        else:
+            st.markdown(md(msg["content"]))
+        if msg["role"] == "assistant":
+            if show_details and msg.get("details"):
+                render_details(msg["details"])
+            action_bar(msg, is_last=(i == len(history) - 1 and pending is None),
+                       on_feedback=record_feedback, on_retry=request_retry)
+
+if pending:
+    question, parent = pending
+    msg = {"role": "assistant", "id": uuid.uuid4().hex[:10], "question": question,
+           "parent_checkpoint": parent}
     with st.chat_message("assistant"):
         try:
-            answer, details = run_turn(prompt)
+            answer, details = run_turn(question, from_checkpoint=parent)
+            msg.update(content=answer, details=details)
+            if show_details:
+                render_details(details)
         except Exception as e:  # show API errors in the page instead of a traceback
             log.exception("turn failed")
-            st.error(f"Something went wrong: {e}")
-            st.stop()
-        if show_details:
-            render_details(details)
-
-    st.session_state.history.append({"role": "assistant", "content": answer, "details": details})
+            msg.update(content=f"Something went wrong: {e}", error=True)
+            st.error(msg["content"])
+        history.append(msg)
+        action_bar(msg, is_last=True, on_feedback=record_feedback, on_retry=request_retry)

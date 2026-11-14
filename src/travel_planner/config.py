@@ -25,6 +25,10 @@ TEMPERATURE: float | None = float(_temperature) if _temperature else None
 LLM_TIMEOUT = float(os.getenv("TRAVEL_PLANNER_LLM_TIMEOUT", "180"))
 LLM_MAX_RETRIES = int(os.getenv("TRAVEL_PLANNER_LLM_MAX_RETRIES", "2"))
 
+# Optional reasoning effort for reasoning models (gpt-5 family): minimal, low, medium, high.
+# Leave unset for non-reasoning models such as gpt-4o-mini.
+REASONING_EFFORT = os.getenv("TRAVEL_PLANNER_REASONING_EFFORT", "").strip() or None
+
 
 def missing_keys() -> list[str]:
     """Return the names of required API keys that are not set."""
