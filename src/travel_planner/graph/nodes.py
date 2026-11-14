@@ -1,5 +1,6 @@
 """Graph nodes: orchestrator, dispatcher, agent + tool nodes, synthesizer."""
 
+import logging
 from functools import lru_cache
 
 from langchain.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -36,6 +37,33 @@ def _planner_model_with_tools():
 
 
 SEARCH_TOOLS_BY_NAME = {tool.name: tool for tool in SEARCH_TOOLS}
+
+log = logging.getLogger("travel_planner.graph")
+
+
+def _text(message) -> str:
+    """Answer text of a model message (content can be a string or a list of blocks)."""
+    return (message.text or "").strip() if message is not None else ""
+
+
+def _finish_reason(message) -> str:
+    return (getattr(message, "response_metadata", None) or {}).get("finish_reason", "?")
+
+
+def _answer_with_fallback(agent: str, response, messages: list, tools: list, capped: bool):
+    """Log the agent's answer; if it came back empty, ask once more in answer-only mode."""
+    if response.tool_calls:
+        log.info("%s requested tools: %s", agent, [c["name"] for c in response.tool_calls])
+        return response
+    log.info("%s answered: %d chars (finish_reason=%s%s)",
+             agent, len(_text(response)), _finish_reason(response), ", round limit reached" if capped else "")
+    if _text(response):
+        return response
+    log.warning("%s returned an empty answer; asking again in answer-only mode", agent)
+    retry = _answer_only(tools).invoke(messages + [SystemMessage(content=ROUND_LIMIT_NOTE)])
+    log.info("%s retry answered: %d chars (finish_reason=%s)", agent, len(_text(retry)), _finish_reason(retry))
+    return retry
+
 
 # Told to the agent once it has used its research rounds
 ROUND_LIMIT_NOTE = (
@@ -123,7 +151,9 @@ def synthesizer_node(state: TravelPlannerState) -> dict:
 
     # If only one result, no synthesis needed
     if len(agent_results) == 1:
-        result = agent_results[0]["result"]
+        result = agent_results[0]["result"] or (
+            "Sorry, the agent returned an empty answer this time. Please tap Retry."
+        )
         return {"final_answer": result, "messages": [AIMessage(content=result)]}
 
     # Format results for synthesis
@@ -139,9 +169,18 @@ def synthesizer_node(state: TravelPlannerState) -> dict:
         ))
     ])
 
+    answer = _text(response)
+    log.info("synthesizer answered: %d chars (finish_reason=%s)", len(answer), _finish_reason(response))
+    if not answer:
+        # Don't lose the agents' work if the combining step comes back empty
+        log.warning("synthesizer returned an empty answer; showing the agents' answers instead")
+        answer = "\n\n---\n\n".join(
+            f"### {r['agent'].replace('_', ' ').title()}\n\n{r['result']}" for r in agent_results if r["result"]
+        ) or "Sorry, I couldn't put an answer together this time. Please tap Retry."
+
     return {
-        "final_answer": response.content,
-        "messages": [AIMessage(content=response.content)],
+        "final_answer": answer,
+        "messages": [AIMessage(content=answer)],
     }
 
 
@@ -158,17 +197,19 @@ def search_agent_node(state: TravelPlannerState):
     new_msgs = [] if search_msgs else [HumanMessage(content=state.get("user_query", ""))]
 
     messages = [SystemMessage(content=FLIGHT_HOTEL_SEARCH_INSTRUCTIONS + NO_BOOKING_RULES)] + search_msgs + new_msgs
-    if _tool_rounds(search_msgs) < config.SEARCH_MAX_TOOL_ROUNDS:
+    capped = _tool_rounds(search_msgs) >= config.SEARCH_MAX_TOOL_ROUNDS
+    if not capped:
         response = _search_model_with_tools().invoke(messages)
     else:
         response = _answer_only(SEARCH_TOOLS).invoke(messages + [SystemMessage(content=ROUND_LIMIT_NOTE)])
+    response = _answer_with_fallback("search_agent", response, messages, SEARCH_TOOLS, capped)
 
     return {
         "search_messages": new_msgs + [response],
         "agent_results": [{
             "agent": "search_agent",
             "focus": "flights and hotels",
-            "result": response.content,
+            "result": _text(response),
         }] if not response.tool_calls else [],
     }
 
@@ -206,17 +247,19 @@ def planner_agent_node(state: TravelPlannerState):
     new_msgs = [] if planner_msgs else [HumanMessage(content=state.get("user_query", ""))]
 
     messages = [SystemMessage(content=TRAVEL_SCOUT_INSTRUCTIONS)] + planner_msgs + new_msgs
-    if _tool_rounds(planner_msgs) < config.PLANNER_MAX_TOOL_ROUNDS:
+    capped = _tool_rounds(planner_msgs) >= config.PLANNER_MAX_TOOL_ROUNDS
+    if not capped:
         response = _planner_model_with_tools().invoke(messages)
     else:
         response = _answer_only(get_planner_tools()).invoke(messages + [SystemMessage(content=ROUND_LIMIT_NOTE)])
+    response = _answer_with_fallback("planner_agent", response, messages, get_planner_tools(), capped)
 
     return {
         "planner_messages": new_msgs + [response],
         "agent_results": [{
             "agent": "planner_agent",
             "focus": "travel planning and itinerary",
-            "result": response.content,
+            "result": _text(response),
         }] if not response.tool_calls else [],
     }
 

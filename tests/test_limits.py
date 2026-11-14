@@ -28,7 +28,7 @@ class GreedyModel(BaseChatModel):
         return "greedy"
 
     def bind_tools(self, tools, tool_choice=None, **kwargs):
-        return GreedyModel(tool_choice=tool_choice, tool_calls_made=self.tool_calls_made)
+        return type(self)(tool_choice=tool_choice, tool_calls_made=self.tool_calls_made)
 
     def with_structured_output(self, schema, **kwargs):
         route = "search_agent_node" if self.tool_calls_made == ["search"] else "planner_agent_node"
@@ -68,3 +68,34 @@ def test_search_agent_stops_after_its_round_limit(monkeypatch):
     result = _run(monkeypatch, model)
     assert model.tool_calls_made[1:] == ["search_flights"] * 3
     assert result["final_answer"] == "final answer"
+
+
+class EmptyOnceModel(GreedyModel):
+    """Answers with empty text unless in answer-only mode (like the bug seen on the live app)."""
+
+    def _generate(self, messages, stop=None, **kwargs):
+        if self.tool_choice == "none":
+            return ChatResult(generations=[ChatGeneration(message=AIMessage(content="recovered answer"))])
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(content=""))])
+
+
+def test_empty_agent_answer_is_retried(monkeypatch):
+    result = _run(monkeypatch, EmptyOnceModel(tool_calls_made=[]))
+    assert result["final_answer"] == "recovered answer"
+
+
+def test_empty_synthesis_falls_back_to_agent_answers(monkeypatch):
+    from travel_planner.graph.nodes import synthesizer_node
+
+    class Silent:
+        def invoke(self, messages):
+            return AIMessage(content="")
+
+    monkeypatch.setattr(nodes, "get_llm", lambda: Silent())
+    state = initial_state("q")
+    state["agent_results"] = [
+        {"agent": "search_agent", "result": "Flights: 6E 2164"},
+        {"agent": "planner_agent", "result": "Day 1: Ghats"},
+    ]
+    answer = synthesizer_node(state)["final_answer"]
+    assert "Flights: 6E 2164" in answer and "Day 1: Ghats" in answer
